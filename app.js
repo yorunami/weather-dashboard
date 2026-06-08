@@ -1,24 +1,54 @@
 /* ============================================================
    Weather Dashboard — Illia Hudz
-   Data: Open-Meteo (free, no API key)
+   Data: Open-Meteo (free, no API key) · EN/DE UI
    ============================================================ */
 
-/* ---------- Weather-code → description + icon category (WMO) ---------- */
+/* ---------- Language ---------- */
+let lang = 'en';
+try { if (localStorage.getItem('lang') === 'de') lang = 'de'; } catch (e) {}
+const locale = () => (lang === 'de' ? 'de-CH' : 'en-GB');
+
+const STR = {
+  en: {
+    searching: (c) => 'Searching for “' + c + '”',
+    localForecast: 'Getting your local forecast',
+    locating: 'Locating you',
+    notFound: 'Couldn’t find that city. Check the spelling and try again.',
+    netErr: 'Couldn’t reach the weather service. Please check your connection and try again.',
+    geoUnavail: 'Geolocation isn’t available in this browser.',
+    geoErr: 'Couldn’t get your location. Try searching for a city instead.',
+    yourLocation: 'Your location', today: 'Today'
+  },
+  de: {
+    searching: (c) => 'Suche nach „' + c + '“',
+    localForecast: 'Lokale Vorhersage wird geladen',
+    locating: 'Standort wird ermittelt',
+    notFound: 'Diese Stadt wurde nicht gefunden. Bitte Schreibweise prüfen und erneut versuchen.',
+    netErr: 'Der Wetterdienst ist nicht erreichbar. Bitte Verbindung prüfen und erneut versuchen.',
+    geoUnavail: 'Standortbestimmung ist in diesem Browser nicht verfügbar.',
+    geoErr: 'Dein Standort konnte nicht ermittelt werden. Suche stattdessen nach einer Stadt.',
+    yourLocation: 'Dein Standort', today: 'Heute'
+  }
+};
+function t() { return STR[lang]; }
+
+/* ---------- Weather-code → category + EN/DE label (WMO) ---------- */
+const WMO = {
+  0: ['clear', 'Clear sky', 'Klarer Himmel'],
+  1: ['partly', 'Mainly clear', 'Überwiegend klar'], 2: ['partly', 'Partly cloudy', 'Teils bewölkt'], 3: ['cloud', 'Overcast', 'Bedeckt'],
+  45: ['fog', 'Fog', 'Nebel'], 48: ['fog', 'Rime fog', 'Reifnebel'],
+  51: ['drizzle', 'Light drizzle', 'Leichter Niesel'], 53: ['drizzle', 'Drizzle', 'Niesel'], 55: ['drizzle', 'Heavy drizzle', 'Starker Niesel'],
+  56: ['drizzle', 'Freezing drizzle', 'Gefrierender Niesel'], 57: ['drizzle', 'Freezing drizzle', 'Gefrierender Niesel'],
+  61: ['rain', 'Light rain', 'Leichter Regen'], 63: ['rain', 'Rain', 'Regen'], 65: ['rain', 'Heavy rain', 'Starker Regen'],
+  66: ['rain', 'Freezing rain', 'Gefrierender Regen'], 67: ['rain', 'Freezing rain', 'Gefrierender Regen'],
+  71: ['snow', 'Light snow', 'Leichter Schnee'], 73: ['snow', 'Snow', 'Schnee'], 75: ['snow', 'Heavy snow', 'Starker Schnee'], 77: ['snow', 'Snow grains', 'Schneegriesel'],
+  80: ['rain', 'Light showers', 'Leichte Schauer'], 81: ['rain', 'Showers', 'Schauer'], 82: ['rain', 'Violent showers', 'Heftige Schauer'],
+  85: ['snow', 'Snow showers', 'Schneeschauer'], 86: ['snow', 'Snow showers', 'Schneeschauer'],
+  95: ['thunder', 'Thunderstorm', 'Gewitter'], 96: ['thunder', 'Thunderstorm, hail', 'Gewitter, Hagel'], 99: ['thunder', 'Thunderstorm, hail', 'Gewitter, Hagel']
+};
 function describe(code) {
-  const m = {
-    0: ['Clear sky', 'clear'],
-    1: ['Mainly clear', 'partly'], 2: ['Partly cloudy', 'partly'], 3: ['Overcast', 'cloud'],
-    45: ['Fog', 'fog'], 48: ['Rime fog', 'fog'],
-    51: ['Light drizzle', 'drizzle'], 53: ['Drizzle', 'drizzle'], 55: ['Heavy drizzle', 'drizzle'],
-    56: ['Freezing drizzle', 'drizzle'], 57: ['Freezing drizzle', 'drizzle'],
-    61: ['Light rain', 'rain'], 63: ['Rain', 'rain'], 65: ['Heavy rain', 'rain'],
-    66: ['Freezing rain', 'rain'], 67: ['Freezing rain', 'rain'],
-    71: ['Light snow', 'snow'], 73: ['Snow', 'snow'], 75: ['Heavy snow', 'snow'], 77: ['Snow grains', 'snow'],
-    80: ['Light showers', 'rain'], 81: ['Showers', 'rain'], 82: ['Violent showers', 'rain'],
-    85: ['Snow showers', 'snow'], 86: ['Snow showers', 'snow'],
-    95: ['Thunderstorm', 'thunder'], 96: ['Thunderstorm, hail', 'thunder'], 99: ['Thunderstorm, hail', 'thunder']
-  };
-  return m[code] || ['—', 'cloud'];
+  const e = WMO[code] || ['cloud', '—', '—'];
+  return { cat: e[0], label: lang === 'de' ? e[2] : e[1] };
 }
 
 const ICONS = {
@@ -40,6 +70,11 @@ const geoBtn = document.getElementById('geo-btn');
 const statusEl = document.getElementById('status');
 const weatherEl = document.getElementById('weather');
 
+/* ---------- State (for re-render on language switch) ---------- */
+let lastData = null;
+let lastPlace = '';
+let lastError = null; // 'notFound' | 'netErr' | 'geoErr' | 'geoUnavail'
+
 /* ---------- Status helpers ---------- */
 function setStatus(msg, kind) {
   if (!msg) { statusEl.hidden = true; statusEl.textContent = ''; statusEl.className = 'status'; return; }
@@ -50,14 +85,13 @@ function setStatus(msg, kind) {
 
 /* ---------- API ---------- */
 async function geocode(city) {
-  const url = 'https://geocoding-api.open-meteo.com/v1/search?name=' + encodeURIComponent(city) + '&count=1&language=en&format=json';
+  const url = 'https://geocoding-api.open-meteo.com/v1/search?name=' + encodeURIComponent(city) + '&count=1&language=' + lang + '&format=json';
   const r = await fetch(url);
   if (!r.ok) throw new Error('geo');
   const j = await r.json();
   if (!j.results || !j.results.length) throw new Error('notfound');
   return j.results[0];
 }
-
 async function getForecast(lat, lon) {
   const url = 'https://api.open-meteo.com/v1/forecast'
     + '?latitude=' + lat + '&longitude=' + lon
@@ -73,49 +107,43 @@ async function getForecast(lat, lon) {
 async function loadCity(city) {
   city = (city || '').trim();
   if (!city) return;
-  setStatus('Searching for “' + city + '”', 'loading');
+  lastError = null;
+  setStatus(t().searching(city), 'loading');
   try {
     const place = await geocode(city);
     const data = await getForecast(place.latitude, place.longitude);
     const name = [place.name, place.admin1].filter(Boolean).join(', ');
     render(data, name + (place.country ? ' · ' + place.country : ''));
     try { localStorage.setItem('weather:lastCity', city); } catch (e) {}
-  } catch (err) {
-    handleError(err);
-  }
+  } catch (err) { handleError(err); }
 }
-
-async function loadCoords(lat, lon, label) {
-  setStatus('Getting your local forecast', 'loading');
+async function loadCoords(lat, lon) {
+  lastError = null;
+  setStatus(t().localForecast, 'loading');
   try {
     const data = await getForecast(lat, lon);
-    render(data, label || 'Your location');
-  } catch (err) {
-    handleError(err);
-  }
+    render(data, t().yourLocation);
+  } catch (err) { handleError(err); }
 }
-
 function handleError(err) {
   weatherEl.hidden = true;
-  if (err && err.message === 'notfound') {
-    setStatus('Couldn’t find that city. Check the spelling and try again.', 'error');
-  } else {
-    setStatus('Couldn’t reach the weather service. Please check your connection and try again.', 'error');
-  }
+  lastData = null;
+  lastError = (err && err.message === 'notfound') ? 'notFound' : 'netErr';
+  setStatus(t()[lastError], 'error');
 }
 
 /* ---------- Render ---------- */
 function render(data, placeLabel) {
+  lastData = data; lastPlace = placeLabel; lastError = null;
   setStatus(null);
 
   const cur = data.current;
-  const [label, cat] = describe(cur.weather_code);
-
-  document.getElementById('cur-icon').innerHTML = icon(cat);
+  const info = describe(cur.weather_code);
+  document.getElementById('cur-icon').innerHTML = icon(info.cat);
   document.getElementById('cur-temp').textContent = Math.round(cur.temperature_2m);
-  document.getElementById('cur-desc').textContent = label;
+  document.getElementById('cur-desc').textContent = info.label;
   document.getElementById('place').textContent = placeLabel;
-  document.getElementById('local-time').textContent = new Intl.DateTimeFormat('en', {
+  document.getElementById('local-time').textContent = new Intl.DateTimeFormat(locale(), {
     weekday: 'long', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: data.timezone
   }).format(new Date());
   document.getElementById('feels').textContent = Math.round(cur.apparent_temperature) + '°';
@@ -124,20 +152,19 @@ function render(data, placeLabel) {
 
   renderChart(data.daily);
   renderDays(data.daily);
-
   weatherEl.hidden = false;
 }
 
 function renderDays(daily) {
   const list = document.getElementById('days');
   list.innerHTML = daily.time.map((d, i) => {
-    const [, cat] = describe(daily.weather_code[i]);
-    const dow = new Date(d + 'T12:00:00').toLocaleDateString('en', { weekday: 'short' });
+    const info = describe(daily.weather_code[i]);
+    const dow = i === 0 ? t().today : new Date(d + 'T12:00:00').toLocaleDateString(locale(), { weekday: 'short' });
     const hi = Math.round(daily.temperature_2m_max[i]);
     const lo = Math.round(daily.temperature_2m_min[i]);
     return '<li class="day">'
-      + '<span class="dow">' + (i === 0 ? 'Today' : dow) + '</span>'
-      + '<span class="day-icon">' + icon(cat) + '</span>'
+      + '<span class="dow">' + dow + '</span>'
+      + '<span class="day-icon">' + icon(info.cat) + '</span>'
       + '<span class="temps"><span class="hi">' + hi + '°</span><span class="lo">' + lo + '°</span></span>'
       + '</li>';
   }).join('');
@@ -148,57 +175,68 @@ function renderChart(daily) {
   const mins = daily.temperature_2m_min.map(Math.round);
   const n = daily.time.length;
   const W = 700, H = 210, padX = 26, padTop = 28, padBottom = 24;
-
   const all = maxs.concat(mins);
   let lo = Math.min.apply(null, all), hi = Math.max.apply(null, all);
   if (hi === lo) { hi += 1; lo -= 1; }
-
   const x = (i) => padX + i * ((W - 2 * padX) / (n - 1));
-  const y = (t) => padTop + (H - padTop - padBottom) * (1 - (t - lo) / (hi - lo));
-
-  const pts = (arr) => arr.map((t, i) => x(i) + ',' + y(t)).join(' ');
-  const dots = (arr, cls) => arr.map((t, i) => '<circle class="' + cls + '" cx="' + x(i) + '" cy="' + y(t) + '" r="3"/>').join('');
-  const labels = (arr, cls, dy) => arr.map((t, i) => '<text class="lbl ' + cls + '" x="' + x(i) + '" y="' + (y(t) + dy) + '" text-anchor="middle">' + t + '°</text>').join('');
-
-  const svg =
+  const y = (v) => padTop + (H - padTop - padBottom) * (1 - (v - lo) / (hi - lo));
+  const pts = (arr) => arr.map((v, i) => x(i) + ',' + y(v)).join(' ');
+  const dots = (arr, cls) => arr.map((v, i) => '<circle class="' + cls + '" cx="' + x(i) + '" cy="' + y(v) + '" r="3"/>').join('');
+  const labels = (arr, cls, dy) => arr.map((v, i) => '<text class="lbl ' + cls + '" x="' + x(i) + '" y="' + (y(v) + dy) + '" text-anchor="middle">' + v + '°</text>').join('');
+  document.getElementById('chart').innerHTML =
     '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="7-day high and low temperature chart">'
     + '<polyline class="line-max" points="' + pts(maxs) + '"/>'
     + '<polyline class="line-min" points="' + pts(mins) + '"/>'
     + dots(maxs, 'dot-max') + dots(mins, 'dot-min')
-    + labels(maxs, 'lbl-max', -10)
-    + labels(mins, '', 18)
+    + labels(maxs, 'lbl-max', -10) + labels(mins, '', 18)
     + '</svg>';
-
-  document.getElementById('chart').innerHTML = svg;
 }
 
 /* ---------- Events ---------- */
-form.addEventListener('submit', (e) => {
-  e.preventDefault();
-  loadCity(input.value);
-});
-
+form.addEventListener('submit', (e) => { e.preventDefault(); loadCity(input.value); });
 geoBtn.addEventListener('click', () => {
-  if (!navigator.geolocation) {
-    setStatus('Geolocation isn’t available in this browser.', 'error');
-    return;
-  }
-  setStatus('Locating you', 'loading');
+  if (!navigator.geolocation) { lastError = 'geoUnavail'; setStatus(t().geoUnavail, 'error'); return; }
+  setStatus(t().locating, 'loading');
   navigator.geolocation.getCurrentPosition(
-    (pos) => loadCoords(pos.coords.latitude, pos.coords.longitude, 'Your location'),
-    () => setStatus('Couldn’t get your location. Try searching for a city instead.', 'error'),
+    (pos) => loadCoords(pos.coords.latitude, pos.coords.longitude),
+    () => { lastError = 'geoErr'; setStatus(t().geoErr, 'error'); },
     { timeout: 10000 }
   );
 });
 
+/* ---------- Language toggle (EN / DE) ---------- */
+function applyLang(next) {
+  lang = next;
+  document.documentElement.lang = next;
+  document.querySelectorAll('[data-de]').forEach((el) => {
+    if (el.dataset.en === undefined) el.dataset.en = el.innerHTML;
+    el.innerHTML = next === 'de' ? el.dataset.de : el.dataset.en;
+  });
+  document.querySelectorAll('[data-de-ph]').forEach((el) => {
+    if (el.dataset.enPh === undefined) el.dataset.enPh = el.getAttribute('placeholder') || '';
+    el.setAttribute('placeholder', next === 'de' ? el.dataset.dePh : el.dataset.enPh);
+  });
+  const lt = document.getElementById('lang-toggle');
+  if (lt) lt.textContent = next === 'de' ? 'EN' : 'DE';
+  // Re-render dynamic content in the new language
+  if (lastData) render(lastData, lastPlace);
+  else if (lastError) setStatus(t()[lastError], 'error');
+}
+const langToggle = document.getElementById('lang-toggle');
+if (langToggle) {
+  langToggle.addEventListener('click', () => {
+    const next = lang === 'de' ? 'en' : 'de';
+    try { localStorage.setItem('lang', next); } catch (e) {}
+    applyLang(next);
+  });
+}
+
 /* ---------- Chrome: theme, nav, year ---------- */
 document.getElementById('year').textContent = new Date().getFullYear();
-
 const nav = document.getElementById('nav');
 const onScroll = () => nav.classList.toggle('scrolled', window.scrollY > 8);
 onScroll();
 window.addEventListener('scroll', onScroll, { passive: true });
-
 const themeToggle = document.getElementById('theme-toggle');
 if (themeToggle) {
   themeToggle.addEventListener('click', () => {
@@ -209,6 +247,7 @@ if (themeToggle) {
 }
 
 /* ---------- Init ---------- */
+applyLang(lang); // translate static UI + set toggle label
 (function init() {
   let last = 'Basel';
   try { last = localStorage.getItem('weather:lastCity') || 'Basel'; } catch (e) {}
